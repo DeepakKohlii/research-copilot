@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     search_provider: str = "auto"
     tavily_api_key: str | None = None
 
+    # Chat: run a live web search per question only when the briefing doesn't
+    # already cover it (saves search-API cost). Set false to never search in chat.
+    chat_live_search: bool = False
+
     # Workflow tuning
     quality_threshold: float = 0.7
     max_research_passes: int = 2
