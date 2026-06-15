@@ -1,6 +1,3 @@
-"""Application entrypoint: builds the FastAPI app, configures CORS for the React
-dev server, initialises the DB on startup, and registers a catch-all error
-handler so the UI always gets a structured error."""
 from __future__ import annotations
 
 from contextlib import asynccontextmanager

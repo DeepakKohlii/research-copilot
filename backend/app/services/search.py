@@ -1,15 +1,3 @@
-"""Search provider abstraction.
-
-Nodes depend on the `SearchProvider` protocol, never a concrete API. Two
-implementations:
-
-- `MockSearch` returns deterministic synthetic findings so the workflow runs
-  fully offline (tests, demos with no keys). A "deep" query (used on retry
-  passes) returns more results so the quality-check loop can trigger and resolve.
-- `TavilySearch` calls the Tavily Search API — purpose-built for LLM research —
-  to return real web results with real source URLs. Selection is driven by
-  config: a Tavily key (or SEARCH_PROVIDER=tavily) switches it on automatically.
-"""
 from __future__ import annotations
 
 import hashlib
@@ -45,14 +33,6 @@ class MockSearch:
 
 
 class TavilySearch:
-    """Real web search via the Tavily API (https://tavily.com).
-
-    Returns the same {title, snippet, source} shape as the mock so nodes need no
-    changes. A failed request degrades gracefully to an empty result list for
-    that query — a transient search error lowers coverage (and may trigger a
-    retry pass) rather than killing the whole briefing.
-    """
-
     ENDPOINT = "https://api.tavily.com/search"
 
     def __init__(self) -> None:
@@ -75,7 +55,7 @@ class TavilySearch:
             resp = httpx.post(self.ENDPOINT, json=payload, timeout=30.0)
             resp.raise_for_status()
             data = resp.json()
-        except Exception as exc:  # noqa: BLE001 — resilience over strictness here
+        except Exception as exc:  
             log.warning("Tavily search failed for %r: %s", query, exc)
             return []
 

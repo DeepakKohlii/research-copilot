@@ -1,5 +1,3 @@
-"""Logging setup. Keeps a single, consistent format across API and workflow so
-runs are traceable end-to-end by session_id."""
 from __future__ import annotations
 
 import logging

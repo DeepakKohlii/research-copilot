@@ -1,11 +1,3 @@
-"""Graph assembly. Wires the nodes into the Planner -> Research -> Analysis ->
-Quality check -> Report shape, with a conditional edge back to Research.
-
-The checkpointer is a factory so the durability tier is a config choice:
-MemorySaver for dev, and a persistent saver (SqliteSaver / PostgresSaver from
-langgraph-checkpoint-*) in production for true cross-restart resume. App-level
-recoverability (event replay) does not depend on this — see runner.py.
-"""
 from __future__ import annotations
 
 from langgraph.checkpoint.memory import MemorySaver

@@ -1,14 +1,3 @@
-"""Workflow nodes.
-
-Shape: Planner -> Research -> Analysis -> Quality check -> (loop back | Report)
-
-Each node is a pure-ish function of state that returns a partial state update.
-Failure handling is per-node: an exception is captured into state['errors'] and
-re-raised so the runner can mark the session failed while preserving the
-intermediate outputs already persisted. The quality-check + conditional edge is
-the meaningful routing: thin research loops back for a deeper pass (bounded by
-max_research_passes) before the report is generated.
-"""
 from __future__ import annotations
 
 import json
@@ -23,13 +12,35 @@ from .state import ResearchState
 
 log = get_logger("graph.nodes")
 
-DEFAULT_ANGLES = [
-    "company overview",
-    "recent news and developments",
-    "financials and funding",
-    "leadership and key people",
-    "products and market position",
-    "competitive landscape",
+# The briefing's required research sections (per the product spec). Each drives
+# a search angle and becomes a titled section in the final report, so the report
+# always contains these named sections regardless of the company.
+RESEARCH_SECTIONS = [
+    {
+        "key": "company_overview",
+        "title": "Company overview",
+        "query": "company overview what they do mission history headquarters",
+    },
+    {
+        "key": "products_services",
+        "title": "Products & services",
+        "query": "products services product lines offerings pricing",
+    },
+    {
+        "key": "target_customers",
+        "title": "Target customers",
+        "query": "target customers ideal customer profile market segments who they sell to",
+    },
+    {
+        "key": "business_signals",
+        "title": "Business signals",
+        "query": "funding revenue growth hiring partnerships acquisitions recent news",
+    },
+    {
+        "key": "risks_challenges",
+        "title": "Risks & challenges",
+        "query": "risks challenges competitors threats controversies headwinds",
+    },
 ]
 
 
@@ -42,43 +53,63 @@ class CopilotNodes:
     # ---- nodes ----------------------------------------------------------
     def planner(self, state: ResearchState) -> ResearchState:
         company = state["company"]
-        objective = state.get("objective", "")
         log.info("[%s] planner: scoping research for %s", state["session_id"], company)
-        plan = list(DEFAULT_ANGLES)
-        # Light objective-aware tailoring.
-        if objective and "partnership" in objective.lower():
-            plan.append("partnership and integration opportunities")
-        if objective and ("sell" in objective.lower() or "sales" in objective.lower()):
-            plan.append("buying signals and budget indicators")
+        # The plan is the fixed set of required sections — copied so each run
+        # owns its list and the graph state stays self-contained.
+        plan = [dict(sec) for sec in RESEARCH_SECTIONS]
         return {"plan": plan, "current_node": "planner"}
 
     def research(self, state: ResearchState) -> ResearchState:
         company = state["company"]
+        website = state.get("website", "")
         plan = state.get("plan", [])
         passes = state.get("research_passes", 0) + 1
         deep = passes > 1
         log.info(
-            "[%s] research: pass %d (deep=%s) over %d angles",
+            "[%s] research: pass %d (deep=%s) over %d sections",
             state["session_id"], passes, deep, len(plan),
         )
+        # Anchor every query to the company and (if given) its domain, so the
+        # search hits the right entity rather than a namesake.
+        site = self._domain(website)
         findings: list[dict] = []
-        for angle in plan:
-            query = f"{company} {angle}" + (" detailed latest" if deep else "")
+        for sec in plan:
+            query = f"{company} {sec['query']}"
+            if site:
+                query += f" {site}"
+            if deep:
+                query += " detailed latest"
             results = self.search.search(query, deep=deep)
-            findings.append({"angle": angle, "query": query, "results": results})
+            findings.append(
+                {
+                    "key": sec["key"],
+                    "title": sec["title"],
+                    "query": query,
+                    "results": results,
+                }
+            )
         return {
             "raw_findings": findings,
             "research_passes": passes,
             "current_node": "research",
         }
 
+    @staticmethod
+    def _domain(website: str) -> str:
+        """Bare domain from a website input ('https://www.stripe.com/x' -> 'stripe.com')."""
+        if not website:
+            return ""
+        site = website.strip().lower()
+        site = site.split("//", 1)[-1]  # drop scheme
+        site = site.split("/", 1)[0]  # drop path
+        return site[4:] if site.startswith("www.") else site
+
     def analysis(self, state: ResearchState) -> ResearchState:
         log.info("[%s] analysis: synthesising findings", state["session_id"])
         analysis: dict[str, list[str]] = {}
         for block in state.get("raw_findings", []):
-            angle = block["angle"]
             points = [r["snippet"] for r in block["results"]]
-            analysis[angle] = points
+            analysis[block["title"]] = points
         return {"analysis": analysis, "current_node": "analysis"}
 
     # ---- report synthesis (single batched LLM call) --------------------
@@ -127,16 +158,12 @@ class CopilotNodes:
     def _synthesise_report(
         self, company: str, objective: str, findings: list[dict]
     ) -> dict:
-        """One structured LLM call that produces the whole briefing body —
-        per-angle bullets, the executive summary, and meeting prep — replacing
-        the former per-section + summary calls (7 → 1). Returns normalised data
-        with any missing/garbled field left empty for the caller to backfill."""
         empty = {
             "executive_summary": "",
             "sections": {},
-            "talking_points": [],
-            "questions_to_ask": [],
-            "risks": [],
+            "discovery_questions": [],
+            "outreach_strategy": [],
+            "unknowns": [],
         }
         if not findings:
             return empty
@@ -156,33 +183,34 @@ class CopilotNodes:
                 f"  - {r.get('title', 'source')}: {r.get('snippet', '')}"
                 for r in b["results"]
             )
-            notes.append(f"Angle: {b['angle']}\n{lines or '  - (no results)'}")
+            notes.append(f"[{b['key']}] {b['title']}\n{lines or '  - (no results)'}")
         research_block = "\n\n".join(notes)
-        angle_list = ", ".join(f'"{b["angle"]}"' for b in findings)
+        key_list = ", ".join(f'"{b["key"]}"' for b in findings)
 
         raw = self.llm.complete(
             system=(
-                "You are a research analyst preparing a sales-meeting briefing. "
+                "You are a B2B sales research analyst preparing a meeting briefing. "
                 "Return ONLY a single valid JSON object — no markdown fences and "
-                "no prose outside the JSON. Be factual and concise."
+                "no prose outside the JSON. Be factual, specific and concise."
             ),
             prompt=(
                 f"Company: {company}\n"
                 f"Meeting objective: {objective or 'general business meeting'}\n"
                 f"{source_note}\n\n"
-                f"Research notes by angle:\n{research_block}\n\n"
+                f"Research notes by section:\n{research_block}\n\n"
                 "Produce a JSON object with EXACTLY this shape:\n"
                 "{\n"
                 '  "executive_summary": "3-4 sentence prose summary",\n'
                 '  "sections": [\n'
-                f"    {{\"angle\": one of [{angle_list}], "
+                f"    {{\"key\": one of [{key_list}], "
                 '"key_points": ["3-4 short factual bullets"]}\n'
                 "  ],\n"
-                '  "talking_points": ["2-4 ways to open or steer the meeting"],\n'
-                '  "questions_to_ask": ["2-4 sharp discovery questions"],\n'
-                '  "risks": ["1-3 things to verify or watch out for"]\n'
+                '  "discovery_questions": ["3-5 sharp questions to ask in the meeting"],\n'
+                '  "outreach_strategy": ["3-4 bullets: how to position and approach them"],\n'
+                '  "unknowns": ["2-4 important things the research could NOT determine"]\n'
                 "}\n"
-                "Include exactly one sections entry for every listed angle."
+                "Include exactly one sections entry for every listed key. Tailor "
+                "discovery_questions and outreach_strategy to the meeting objective."
             ),
             json_mode=True,
         )
@@ -198,18 +226,18 @@ class CopilotNodes:
         for sec in data.get("sections") or []:
             if not isinstance(sec, dict):
                 continue
-            angle = str(sec.get("angle", "")).strip().lower()
+            key = str(sec.get("key", "")).strip().lower()
             pts = self._strlist(sec.get("key_points"), limit=4)
-            if angle and pts:
-                sections_map[angle] = pts
+            if key and pts:
+                sections_map[key] = pts
 
         summary = str(data.get("executive_summary", "")).strip()
         return {
             "executive_summary": summary if self._is_valid_summary(summary) else "",
             "sections": sections_map,
-            "talking_points": self._strlist(data.get("talking_points"), 4),
-            "questions_to_ask": self._strlist(data.get("questions_to_ask"), 4),
-            "risks": self._strlist(data.get("risks"), 3),
+            "discovery_questions": self._strlist(data.get("discovery_questions"), 5),
+            "outreach_strategy": self._strlist(data.get("outreach_strategy"), 4),
+            "unknowns": self._strlist(data.get("unknowns"), 4),
         }
 
     def _is_valid_summary(self, text: str) -> bool:
@@ -268,27 +296,34 @@ class CopilotNodes:
 
     def report(self, state: ResearchState) -> ResearchState:
         company = state["company"]
+        website = state.get("website", "")
         objective = state.get("objective", "")
         log.info("[%s] report: generating briefing", state["session_id"])
 
         findings = state.get("raw_findings", [])
-        # Single batched LLM call for the whole briefing body (bullets + summary
-        # + meeting prep), instead of one call per angle plus a summary call.
+        # Single batched LLM call for the whole briefing body.
         synth = self._synthesise_report(company, objective, findings)
 
         sections = []
+        all_sources: list[str] = []
+        seen_sources: set[str] = set()
         for block in findings:
-            angle = block["angle"]
             # Prefer the model's bullets; fall back to source snippets (no extra
-            # LLM call) if this angle is missing or the JSON was unusable.
-            key_points = synth["sections"].get(angle.lower()) or (
+            # LLM call) if this section is missing or the JSON was unusable.
+            key_points = synth["sections"].get(block["key"]) or (
                 self._bullets_from_snippets(block["results"])
             )
+            srcs = [r["source"] for r in block["results"] if r.get("source")]
+            for s in srcs:
+                if s not in seen_sources:
+                    seen_sources.add(s)
+                    all_sources.append(s)
             sections.append(
                 {
-                    "title": angle.capitalize(),
+                    "key": block["key"],
+                    "title": block["title"],
                     "key_points": key_points,
-                    "sources": [r["source"] for r in block["results"] if r.get("source")],
+                    "sources": srcs,
                 }
             )
 
@@ -297,37 +332,41 @@ class CopilotNodes:
         )
 
         using_mock_search = self.settings.resolved_search_provider == "mock"
-        risks = list(synth["risks"])
+        unknowns = list(synth["unknowns"])
+        # Always flag sections research couldn't cover, plus the mock-mode caveat.
+        empty_titles = [s["title"] for s in sections if not s["key_points"]]
+        for title in empty_titles:
+            unknowns.append(f"Limited public data on {title.lower()} — verify directly.")
         if using_mock_search:
-            # Always surface that sources aren't live when search is mocked.
-            risks.insert(
-                0,
-                "Verify key facts live before the meeting — search is running in "
-                "mock mode (no live web results).",
+            unknowns.append(
+                "Sources are demo/mock data (no live web search) — confirm facts before the meeting."
             )
-        elif not risks:
-            risks = ["Verify key facts live before the meeting — some sources may "
-                     "be dated or incomplete."]
+        if not unknowns:
+            unknowns = ["Confirm the latest figures and org changes directly before the meeting."]
 
         meeting_prep = {
-            "talking_points": synth["talking_points"] or [
-                f"Open with {company}'s recent momentum and shared priorities.",
-                "Tie our offering to the gaps surfaced in the research.",
-            ],
-            "questions_to_ask": synth["questions_to_ask"] or [
+            "discovery_questions": synth["discovery_questions"] or [
                 "What are your top priorities for the next two quarters?",
                 "Who else is involved in evaluating a solution like ours?",
+                "What's driving the timeline for solving this now?",
             ],
-            "risks": risks[:3],
+            "outreach_strategy": synth["outreach_strategy"] or [
+                f"Lead with {company}'s recent momentum and tie it to a shared priority.",
+                "Anchor the pitch to the gaps surfaced in the research.",
+                "Bring a specific, relevant proof point or customer story.",
+            ],
+            "unknowns": unknowns[:5],
         }
         report = {
             "company": company,
+            "website": website,
             "objective": objective,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "confidence": round(state.get("quality_score", 0.0), 2),
             "executive_summary": executive_summary,
             "sections": sections,
             "meeting_prep": meeting_prep,
+            "sources": all_sources,
         }
         return {"report": report, "current_node": "report"}
 

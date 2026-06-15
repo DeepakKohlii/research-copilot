@@ -1,10 +1,3 @@
-"""A tiny in-process pub/sub. The runner publishes node events here; SSE
-connections subscribe to get the live tail. This is the single-process version
-of what a Redis pub/sub (or the DB as a poll target) would do at scale.
-
-Because the DB is the durable source of truth, losing the bus (e.g. a restart)
-never loses progress — a reconnecting client replays from persisted events.
-"""
 from __future__ import annotations
 
 import asyncio

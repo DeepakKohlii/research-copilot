@@ -1,6 +1,3 @@
-"""Repository pattern: the only place that talks to the ORM. The rest of the
-app depends on these methods, not on SQLAlchemy, so the storage backend can be
-swapped without touching API or workflow code."""
 from __future__ import annotations
 
 import uuid
@@ -16,10 +13,13 @@ class Repository:
         self.db = db
 
     # ---- sessions -------------------------------------------------------
-    def create_session(self, company: str, objective: str) -> Session:
+    def create_session(
+        self, company: str, objective: str, website: str = ""
+    ) -> Session:
         obj = Session(
             id=str(uuid.uuid4()),
             company=company,
+            website=website or "",
             objective=objective or "",
             status="queued",
         )

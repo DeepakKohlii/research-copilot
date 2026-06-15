@@ -1,11 +1,3 @@
-"""ORM models. Three tables carry all app domain state:
-
-- Session: one research run (the unit the UI lists and opens).
-- Event:   an append-only log of node-level progress for a session. This is
-           the source of truth the SSE stream replays from, and what gives the
-           app recoverability across reconnects/restarts.
-- ChatMessage: follow-up Q&A turns over a finished briefing.
-"""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -27,6 +19,7 @@ class Session(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     company: Mapped[str] = mapped_column(String(255))
+    website: Mapped[str] = mapped_column(String(500), default="")
     objective: Mapped[str] = mapped_column(Text, default="")
     # queued | running | completed | failed
     status: Mapped[str] = mapped_column(String(20), default="queued")

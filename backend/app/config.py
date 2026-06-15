@@ -23,15 +23,19 @@ class Settings(BaseSettings):
     # Persistence
     database_url: str = "sqlite:///./copilot.db"
 
-    # LLM: auto (default) picks from keys/URL | mock | anthropic | openai
     llm_provider: str = "auto"
     llm_model: str = ""
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None
     openai_base_url: str = ""
 
-    # Search provider: "mock" (offline) | future: tavily, serpapi, ...
-    search_provider: str = "mock"
+    llm_max_tokens: int = 2048
+    llm_request_timeout: float = 90.0
+    llm_max_retries: int = 4
+    llm_use_json_mode: bool = True
+
+    search_provider: str = "auto"
+    tavily_api_key: str | None = None
 
     # Workflow tuning
     quality_threshold: float = 0.7
@@ -71,6 +75,16 @@ class Settings(BaseSettings):
         if self._is_local_url(self.resolved_openai_base_url):
             return "ollama"
         return ""
+
+    @property
+    def resolved_search_provider(self) -> str:
+        choice = self.search_provider.strip().lower()
+        if choice in {"mock", "tavily"}:
+            return choice
+        # "auto": use real search when a key is available, otherwise stay offline.
+        if self.tavily_api_key:
+            return "tavily"
+        return "mock"
 
     @property
     def resolved_llm_provider(self) -> str:

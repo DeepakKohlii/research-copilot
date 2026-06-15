@@ -1,6 +1,3 @@
-"""Engine + session factory. Synchronous SQLAlchemy keeps the demo simple and
-reliable; the repository abstraction below means swapping to an async engine or
-Postgres is a localised change, not a rewrite."""
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -22,6 +19,22 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
+    _ensure_columns()
+
+
+def _ensure_columns() -> None:
+    if not settings.database_url.startswith("sqlite"):
+        return
+    from sqlalchemy import text
+
+    wanted = {"website": "VARCHAR(500) DEFAULT ''"}
+    with engine.begin() as conn:
+        existing = {
+            row[1] for row in conn.execute(text("PRAGMA table_info(sessions)"))
+        }
+        for col, ddl in wanted.items():
+            if col not in existing:
+                conn.execute(text(f"ALTER TABLE sessions ADD COLUMN {col} {ddl}"))
 
 
 def get_db() -> Iterator[OrmSession]:

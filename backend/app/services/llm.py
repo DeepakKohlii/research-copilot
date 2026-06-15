@@ -1,10 +1,3 @@
-"""LLM provider abstraction.
-
-Nodes depend on the `LLMProvider` protocol, never on a concrete SDK. The mock
-provider makes the entire workflow run offline and deterministically (great for
-tests and for a take-home reviewer with no keys); the Anthropic provider is the
-real path. Selection is driven by config.
-"""
 from __future__ import annotations
 
 import json as _json
@@ -22,14 +15,10 @@ class LLMProvider(Protocol):
     def complete(self, system: str, prompt: str, json_mode: bool = False) -> str: ...
 
     def stream(self, system: str, prompt: str) -> Iterator[str]:
-        """Yield response text incrementally (for chat). Providers that can't
-        stream may yield the whole completion as one chunk."""
         ...
 
 
 def _backoff(resp, attempt: int) -> float:
-    """Seconds to wait before a retry. Honours a Retry-After header (free
-    OpenRouter sends one on 429) and otherwise uses capped exponential backoff."""
     if resp is not None:
         retry_after = resp.headers.get("Retry-After") or resp.headers.get(
             "X-RateLimit-Reset"
@@ -43,8 +32,6 @@ def _backoff(resp, attempt: int) -> float:
 
 
 class MockLLM:
-    """Deterministic, offline. Produces plausible narrative text from the prompt
-    so downstream structure (reports, chat) is exercised end-to-end."""
 
     def complete(self, system: str, prompt: str, json_mode: bool = False) -> str:
         # Very small templated synthesis. Real generation happens in the real
@@ -77,8 +64,6 @@ class AnthropicLLM:
         self._model = settings.resolved_llm_model
 
     def complete(self, system: str, prompt: str, json_mode: bool = False) -> str:
-        # The Anthropic SDK already retries 429/5xx internally; json_mode is
-        # steered via the system prompt (the caller asks for JSON-only output).
         resp = self._client.messages.create(
             model=self._model,
             max_tokens=settings.llm_max_tokens,
@@ -100,9 +85,6 @@ class AnthropicLLM:
 
 
 class OpenAICompatibleLLM:
-    """Works with any OpenAI-compatible /chat/completions endpoint:
-    OpenRouter (default), Groq, Together, Gemini's OpenAI endpoint, local servers.
-    Uses httpx directly so no extra SDK dependency is needed."""
 
     def __init__(self) -> None:
         self._base = settings.resolved_openai_base_url
@@ -131,9 +113,6 @@ class OpenAICompatibleLLM:
                 {"role": "user", "content": prompt},
             ],
         }
-        # Native JSON mode greatly improves structured output on weaker free
-        # models. Some models/providers reject the param — we detect that and
-        # retry without it (the tolerant parser still handles plain output).
         want_json = json_mode and settings.llm_use_json_mode
         retries = max(1, settings.llm_max_retries)
         last_err: Exception | None = None

@@ -1,5 +1,3 @@
-"""Shared graph state. Every node reads and writes this single TypedDict; the
-checkpointer persists it so a thread can be inspected or resumed."""
 from __future__ import annotations
 
 from typing import Any, TypedDict
@@ -9,6 +7,7 @@ class ResearchState(TypedDict, total=False):
     # inputs
     session_id: str
     company: str
+    website: str
     objective: str
 
     # planner output

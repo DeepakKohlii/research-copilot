@@ -1,16 +1,3 @@
-"""Workflow runner.
-
-Drives the compiled graph with `astream`, and for every node update it (1)
-persists an Event row (durable source of truth) and (2) publishes the same
-event to the in-process bus (live tail for SSE). On completion it reads the
-merged final state from the checkpointer and stores the report on the session;
-on failure it records the error and marks the session failed without discarding
-the intermediate outputs already persisted.
-
-This decoupling — execution writes to the DB, the API reads from it — is what
-makes progress, intermediate outputs, failure handling and recoverability all
-fall out of one mechanism.
-"""
 from __future__ import annotations
 
 import asyncio
@@ -62,6 +49,7 @@ async def run_session(session_id: str) -> None:
     initial: dict = {
         "session_id": session_id,
         "company": session.company,
+        "website": session.website or "",
         "objective": session.objective,
         "errors": [],
     }
