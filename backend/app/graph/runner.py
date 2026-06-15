@@ -51,6 +51,7 @@ async def run_session(session_id: str) -> None:
         "company": session.company,
         "website": session.website or "",
         "objective": session.objective,
+        "raw_findings": [],  # reducer accumulates parallel research branches
         "errors": [],
     }
 
@@ -58,6 +59,18 @@ async def run_session(session_id: str) -> None:
         async for update in graph.astream(initial, config, stream_mode="updates"):
             # `updates` yields {node_name: partial_state} after each node runs.
             for node_name, partial in update.items():
+                # The research map-step nodes are internal; collapse them into a
+                # single "research" event emitted once research has converged
+                # (when analysis runs).
+                if node_name in ("prep_research", "research_section"):
+                    continue
+                if node_name == "analysis":
+                    full = graph.get_state(config).values
+                    repo.update_session(session_id, current_node="research")
+                    await _emit(
+                        repo, session_id, "node_completed", "research",
+                        _research_snapshot(full),
+                    )
                 repo.update_session(session_id, current_node=node_name)
                 snapshot = _summarise(node_name, partial)
                 await _emit(repo, session_id, "node_completed", node_name, snapshot)
@@ -78,17 +91,22 @@ async def run_session(session_id: str) -> None:
         db.close()
 
 
+def _research_snapshot(state: dict) -> dict:
+    """Consolidated research summary from the full state, since the parallel
+    branches each only carry their own slice."""
+    passes = state.get("research_passes", 1)
+    findings = [f for f in state.get("raw_findings", []) if f.get("pass") == passes]
+    return {
+        "pass": passes,
+        "angles": len(findings),
+        "total_findings": sum(len(f["results"]) for f in findings),
+    }
+
+
 def _summarise(node: str, partial: dict) -> dict:
     """Compact, UI-friendly snapshot of a node's output for the progress feed."""
     if node == "planner":
         return {"plan": partial.get("plan", [])}
-    if node == "research":
-        findings = partial.get("raw_findings", [])
-        return {
-            "pass": partial.get("research_passes"),
-            "angles": len(findings),
-            "total_findings": sum(len(f["results"]) for f in findings),
-        }
     if node == "analysis":
         return {"angles_analysed": len(partial.get("analysis", {}))}
     if node == "quality_check":

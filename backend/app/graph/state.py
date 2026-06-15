@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, TypedDict
+import operator
+from typing import Annotated, Any, TypedDict
 
 
 class ResearchState(TypedDict, total=False):
@@ -11,10 +12,13 @@ class ResearchState(TypedDict, total=False):
     objective: str
 
     # planner output
-    plan: list[str]
+    plan: list[dict[str, Any]]
 
-    # research output
-    raw_findings: list[dict[str, Any]]
+    # research output — written by parallel `research_section` branches, so it
+    # needs an `operator.add` reducer to merge their results instead of letting
+    # concurrent writes overwrite each other. Each finding is tagged with its
+    # pass number; downstream nodes use only the current pass's findings.
+    raw_findings: Annotated[list[dict[str, Any]], operator.add]
     research_passes: int
 
     # analysis output

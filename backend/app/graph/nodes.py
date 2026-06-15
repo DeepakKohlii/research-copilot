@@ -4,6 +4,11 @@ import json
 import re
 from datetime import datetime, timezone
 
+try:  # location moved across langgraph versions
+    from langgraph.types import Send
+except ImportError:  # pragma: no cover
+    from langgraph.constants import Send
+
 from ..config import Settings
 from ..logging_conf import get_logger
 from ..services.llm import LLMProvider
@@ -59,40 +64,66 @@ class CopilotNodes:
         plan = [dict(sec) for sec in RESEARCH_SECTIONS]
         return {"plan": plan, "current_node": "planner"}
 
-    def research(self, state: ResearchState) -> ResearchState:
-        company = state["company"]
-        website = state.get("website", "")
-        plan = state.get("plan", [])
+    def prep_research(self, state: ResearchState) -> ResearchState:
+        """Bumps the pass counter before fanning out. Kept tiny and a single
+        writer so it never races with the parallel research branches."""
         passes = state.get("research_passes", 0) + 1
-        deep = passes > 1
         log.info(
-            "[%s] research: pass %d (deep=%s) over %d sections",
-            state["session_id"], passes, deep, len(plan),
+            "[%s] research: pass %d dispatching %d sections in parallel",
+            state["session_id"], passes, len(state.get("plan", [])),
         )
-        # Anchor every query to the company and (if given) its domain, so the
-        # search hits the right entity rather than a namesake.
-        site = self._domain(website)
-        findings: list[dict] = []
-        for sec in plan:
+        return {"research_passes": passes, "current_node": "research"}
+
+    def dispatch_research(self, state: ResearchState) -> list[Send]:
+        """Conditional edge: fan out one parallel `research_section` branch per
+        required section (LangGraph map step). Each branch gets a self-contained
+        payload so the searches run concurrently instead of one after another."""
+        company = state["company"]
+        passes = state.get("research_passes", 0)
+        deep = passes > 1
+        site = self._domain(state.get("website", ""))
+        sends: list[Send] = []
+        for sec in state.get("plan", []):
             query = f"{company} {sec['query']}"
             if site:
                 query += f" {site}"
             if deep:
                 query += " detailed latest"
-            results = self.search.search(query, deep=deep)
-            findings.append(
-                {
-                    "key": sec["key"],
-                    "title": sec["title"],
-                    "query": query,
-                    "results": results,
-                }
+            sends.append(
+                Send(
+                    "research_section",
+                    {
+                        "session_id": state["session_id"],
+                        "section": sec,
+                        "query": query,
+                        "deep": deep,
+                        "pass": passes,
+                    },
+                )
             )
-        return {
-            "raw_findings": findings,
-            "research_passes": passes,
-            "current_node": "research",
+        return sends
+
+    def research_section(self, payload: dict) -> ResearchState:
+        """One parallel branch: search a single section. Returns just its finding
+        (tagged with the pass) which the `raw_findings` reducer merges with the
+        other branches' results."""
+        sec = payload["section"]
+        results = self.search.search(payload["query"], deep=payload["deep"])
+        finding = {
+            "key": sec["key"],
+            "title": sec["title"],
+            "query": payload["query"],
+            "results": results,
+            "pass": payload["pass"],
         }
+        return {"raw_findings": [finding]}
+
+    @staticmethod
+    def _current_findings(state: ResearchState) -> list[dict]:
+        """Findings from the latest research pass only (raw_findings accumulates
+        across loop-back passes via its reducer)."""
+        passes = state.get("research_passes", 0)
+        return [f for f in state.get("raw_findings", []) if f.get("pass") == passes]
 
     @staticmethod
     def _domain(website: str) -> str:
@@ -107,7 +138,7 @@ class CopilotNodes:
     def analysis(self, state: ResearchState) -> ResearchState:
         log.info("[%s] analysis: synthesising findings", state["session_id"])
         analysis: dict[str, list[str]] = {}
-        for block in state.get("raw_findings", []):
+        for block in self._current_findings(state):
             points = [r["snippet"] for r in block["results"]]
             analysis[block["title"]] = points
         return {"analysis": analysis, "current_node": "analysis"}
@@ -280,11 +311,12 @@ class CopilotNodes:
 
     def quality_check(self, state: ResearchState) -> ResearchState:
         plan = state.get("plan", [])
-        total = sum(len(b["results"]) for b in state.get("raw_findings", []))
+        findings = self._current_findings(state)
+        total = sum(len(b["results"]) for b in findings)
         score = min(1.0, total / (2 * max(1, len(plan))))
         passes = state.get("research_passes", 0)
         notes = (
-            f"{total} findings across {len(plan)} angles "
+            f"{total} findings across {len(plan)} sections "
             f"(coverage score {score:.2f}, pass {passes})."
         )
         log.info("[%s] quality_check: %s", state["session_id"], notes)
@@ -300,7 +332,7 @@ class CopilotNodes:
         objective = state.get("objective", "")
         log.info("[%s] report: generating briefing", state["session_id"])
 
-        findings = state.get("raw_findings", [])
+        findings = self._current_findings(state)
         # Single batched LLM call for the whole briefing body.
         synth = self._synthesise_report(company, objective, findings)
 
@@ -380,4 +412,4 @@ class CopilotNodes:
             log.info("[%s] route: max passes reached, proceeding", state["session_id"])
             return "report"
         log.info("[%s] route: quality low, looping back to research", state["session_id"])
-        return "research"
+        return "prep_research"

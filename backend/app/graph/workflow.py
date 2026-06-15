@@ -22,19 +22,26 @@ def build_graph(checkpointer=None, nodes: CopilotNodes | None = None):
     g = StateGraph(ResearchState)
 
     g.add_node("planner", nodes.planner)
-    g.add_node("research", nodes.research)
+    # Research is a map-reduce: prep_research bumps the pass, then dispatch fans
+    # out one parallel research_section per required section; their results merge
+    # back into raw_findings (reducer) before analysis runs.
+    g.add_node("prep_research", nodes.prep_research)
+    g.add_node("research_section", nodes.research_section)
     g.add_node("analysis", nodes.analysis)
     g.add_node("quality_check", nodes.quality_check)
     g.add_node("report", nodes.report)
 
     g.set_entry_point("planner")
-    g.add_edge("planner", "research")
-    g.add_edge("research", "analysis")
+    g.add_edge("planner", "prep_research")
+    g.add_conditional_edges(
+        "prep_research", nodes.dispatch_research, ["research_section"]
+    )
+    g.add_edge("research_section", "analysis")
     g.add_edge("analysis", "quality_check")
     g.add_conditional_edges(
         "quality_check",
         nodes.route_after_quality,
-        {"research": "research", "report": "report"},
+        {"prep_research": "prep_research", "report": "report"},
     )
     g.add_edge("report", END)
 
