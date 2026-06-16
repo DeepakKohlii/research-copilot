@@ -14,10 +14,22 @@ function hostOf(url: string): string {
   }
 }
 
+// Only allow http(s) source links — a source URL ultimately comes from web
+// search results, so this guards against a `javascript:`/`data:` href slipping
+// into a clickable link (XSS hardening).
+function isHttpUrl(url: string): boolean {
+  try {
+    const u = new URL(url)
+    return u.protocol === 'http:' || u.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 function Sources({ sources }: { sources?: string[] }) {
   const seen = new Set<string>()
   const valid = (sources || []).filter((s) => {
-    if (!s || seen.has(s)) return false
+    if (!s || seen.has(s) || !isHttpUrl(s)) return false
     seen.add(s)
     return true
   })

@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     quality_threshold: float = 0.7
     max_research_passes: int = 2
 
+    rate_limit_enabled: bool = True
+    rate_limit_per_minute: int = 20
+
     # Ops. CORS_ORIGINS accepts a comma-separated list, e.g.
     # CORS_ORIGINS=https://your-app.vercel.app,http://localhost:5173
     log_level: str = "INFO"

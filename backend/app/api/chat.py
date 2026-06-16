@@ -8,6 +8,7 @@ from ..config import settings
 from ..db.database import SessionLocal, get_db
 from ..db.repository import Repository
 from ..logging_conf import get_logger
+from ..ratelimit import rate_limit
 from ..schemas.api import ChatMessageOut, ChatRequest
 from ..services.llm import get_llm
 from ..services.search import get_search
@@ -87,7 +88,11 @@ def get_chat(session_id: str, db: OrmSession = Depends(get_db)):
     return repo.list_chat(session_id)
 
 
-@router.post("/{session_id}/chat", response_model=ChatMessageOut)
+@router.post(
+    "/{session_id}/chat",
+    response_model=ChatMessageOut,
+    dependencies=[Depends(rate_limit)],
+)
 def post_chat(session_id: str, body: ChatRequest, db: OrmSession = Depends(get_db)):
     repo = Repository(db)
     session = repo.get_session(session_id)
@@ -113,7 +118,7 @@ def post_chat(session_id: str, body: ChatRequest, db: OrmSession = Depends(get_d
     return msg
 
 
-@router.post("/{session_id}/chat/stream")
+@router.post("/{session_id}/chat/stream", dependencies=[Depends(rate_limit)])
 def post_chat_stream(
     session_id: str, body: ChatRequest, db: OrmSession = Depends(get_db)
 ):

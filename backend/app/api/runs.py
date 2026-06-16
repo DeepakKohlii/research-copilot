@@ -11,13 +11,14 @@ from ..db.database import get_db
 from ..db.repository import Repository
 from ..events import bus
 from ..graph.runner import schedule_run
+from ..ratelimit import rate_limit
 
 router = APIRouter(prefix="/api/sessions", tags=["runs"])
 
 _TERMINAL = {"run_completed", "run_failed"}
 
 
-@router.post("/{session_id}/run", status_code=202)
+@router.post("/{session_id}/run", status_code=202, dependencies=[Depends(rate_limit)])
 async def start_run(session_id: str, db: OrmSession = Depends(get_db)):
     repo = Repository(db)
     session = repo.get_session(session_id)

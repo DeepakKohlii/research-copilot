@@ -5,12 +5,15 @@ from sqlalchemy.orm import Session as OrmSession
 
 from ..db.database import get_db
 from ..db.repository import Repository
+from ..ratelimit import rate_limit
 from ..schemas.api import CreateSessionRequest, SessionOut, SessionSummary
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
 
-@router.post("", response_model=SessionOut, status_code=201)
+@router.post(
+    "", response_model=SessionOut, status_code=201, dependencies=[Depends(rate_limit)]
+)
 def create_session(body: CreateSessionRequest, db: OrmSession = Depends(get_db)):
     repo = Repository(db)
     session = repo.create_session(body.company, body.objective, body.website)
