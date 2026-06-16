@@ -1,15 +1,11 @@
-"""Centralised configuration.
-
-All tunables live here and are overridable via environment variables or a
-.env file. LLM_PROVIDER defaults to "auto": set a key or a local base URL and
-the right provider is picked without flipping switches between environments.
-"""
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Annotated
 from urllib.parse import urlparse
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 _LOCAL_OPENAI_BASE = "http://localhost:11434/v1"
 
@@ -45,9 +41,20 @@ class Settings(BaseSettings):
     quality_threshold: float = 0.7
     max_research_passes: int = 2
 
-    # Ops
+    # Ops. CORS_ORIGINS accepts a comma-separated list, e.g.
+    # CORS_ORIGINS=https://your-app.vercel.app,http://localhost:5173
     log_level: str = "INFO"
-    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
+    cors_origins: Annotated[list[str], NoDecode] = [
+        "http://localhost:5173",
+        "http://localhost:3000",
+    ]
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_csv(cls, v: object) -> object:
+        if isinstance(v, str):
+            return [o.strip() for o in v.split(",") if o.strip()]
+        return v
 
     @staticmethod
     def _is_local_url(url: str) -> bool:

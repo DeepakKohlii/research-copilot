@@ -9,11 +9,20 @@ from sqlalchemy.orm import sessionmaker
 from ..config import settings
 from .models import Base
 
-_connect_args = (
-    {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
-)
+# Some hosts (Render/Heroku) hand out "postgres://"; SQLAlchemy wants
+# "postgresql://". Normalise so the same DATABASE_URL works either way.
+_db_url = settings.database_url
+if _db_url.startswith("postgres://"):
+    _db_url = _db_url.replace("postgres://", "postgresql://", 1)
 
-engine = create_engine(settings.database_url, connect_args=_connect_args, future=True)
+_is_sqlite = _db_url.startswith("sqlite")
+_connect_args = {"check_same_thread": False} if _is_sqlite else {}
+
+# pool_pre_ping avoids stale-connection errors on managed Postgres that drops
+# idle connections; harmless for SQLite.
+engine = create_engine(
+    _db_url, connect_args=_connect_args, pool_pre_ping=True, future=True
+)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
