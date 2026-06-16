@@ -15,7 +15,14 @@ export function HomePage() {
   const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['sessions'],
     queryFn: api.listSessions,
-    refetchInterval: 5000,
+    // Only poll while a briefing is actually in progress; once everything is
+    // settled, stop polling entirely (avoids constant back-to-back calls).
+    refetchInterval: (query) => {
+      const active = query.state.data?.some(
+        (s) => s.status === 'running' || s.status === 'queued',
+      )
+      return active ? 4000 : false
+    },
   })
 
   const count = data?.length || 0

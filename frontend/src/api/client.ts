@@ -1,6 +1,11 @@
 import type { ChatMessage, Session, SessionSummary } from '../types'
 
-const BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+// Strip any trailing slash so a base like "https://api.example.com/" doesn't
+// produce double-slash request URLs ("…com//api/sessions").
+const BASE = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000').replace(
+  /\/+$/,
+  '',
+)
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   let res: Response
